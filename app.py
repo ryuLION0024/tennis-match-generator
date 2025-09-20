@@ -42,8 +42,9 @@ def get_match_balance_score(players, player_counts):
     return max(match_counts) - min(match_counts)
 
 # --- 組み合わせ生成関数（段階的制約緩和対応） ---
-def generate_matches_core(match_type, a_pool, b_pool, history, last_played, a_doubles_map, b_doubles_map, player_counts, max_rank_diff, allow_consecutive=False, allow_repeat_history=False):
+def generate_matches_core(match_type, a_pool, b_pool, history, last_played, a_doubles_map, b_doubles_map, player_counts, max_rank_diff, allow_consecutive=False, allow_repeat_history=False, excluded_pairs=None):
     possible_matches = []
+    excluded_pairs = excluded_pairs or set()
     
     if match_type == "シングルス":
         a_pool_dict = {player: [player] for player in a_pool}
@@ -86,11 +87,17 @@ def generate_matches_core(match_type, a_pool, b_pool, history, last_played, a_do
         # 連戦チェック（allow_consecutiveが False の場合のみ）
         if not allow_consecutive and any(player in last_played for player in a_item_players):
             continue
+        # ペア除外チェック
+        if a_item_key in excluded_pairs:
+            continue
 
         for b_item_key in b_pool_dict.keys():
             b_item_players = b_pool_dict.get(b_item_key, [])
             # 連戦チェック（allow_consecutiveが False の場合のみ）
             if not allow_consecutive and any(player in last_played for player in b_item_players):
+                continue
+            # ペア除外チェック
+            if b_item_key in excluded_pairs:
                 continue
             
             if a_item_key == b_item_key:
@@ -142,23 +149,23 @@ def generate_matches_core(match_type, a_pool, b_pool, history, last_played, a_do
     return [match_info['match'] for match_info in valid_matches]
 
 # --- 段階的制約緩和ラッパー関数 ---
-def generate_matches(match_type, a_pool, b_pool, history, last_played, a_doubles_map, b_doubles_map, player_counts, max_rank_diff, allow_consecutive_global=True, allow_repeat_global=False):
+def generate_matches(match_type, a_pool, b_pool, history, last_played, a_doubles_map, b_doubles_map, player_counts, max_rank_diff, allow_consecutive_global=True, allow_repeat_global=False, excluded_pairs=None):
     """段階的制約緩和でマッチング生成を試行"""
     
     # レベル1: 厳格（連戦回避 + 履歴回避）
-    matches = generate_matches_core(match_type, a_pool, b_pool, history, last_played, a_doubles_map, b_doubles_map, player_counts, max_rank_diff, allow_consecutive=False, allow_repeat_history=False)
+    matches = generate_matches_core(match_type, a_pool, b_pool, history, last_played, a_doubles_map, b_doubles_map, player_counts, max_rank_diff, allow_consecutive=False, allow_repeat_history=False, excluded_pairs=excluded_pairs)
     if matches:
         return matches, "strict"
     
     # レベル2: 連戦許可（ユーザー設定に従う）
     if allow_consecutive_global:
-        matches = generate_matches_core(match_type, a_pool, b_pool, history, last_played, a_doubles_map, b_doubles_map, player_counts, max_rank_diff, allow_consecutive=True, allow_repeat_history=False)
+        matches = generate_matches_core(match_type, a_pool, b_pool, history, last_played, a_doubles_map, b_doubles_map, player_counts, max_rank_diff, allow_consecutive=True, allow_repeat_history=False, excluded_pairs=excluded_pairs)
         if matches:
             return matches, "allow_consecutive"
     
     # レベル3: 全制約緩和（ユーザー設定に従う）
     if allow_repeat_global:
-        matches = generate_matches_core(match_type, a_pool, b_pool, history, last_played, a_doubles_map, b_doubles_map, player_counts, max_rank_diff, allow_consecutive=True, allow_repeat_history=True)
+        matches = generate_matches_core(match_type, a_pool, b_pool, history, last_played, a_doubles_map, b_doubles_map, player_counts, max_rank_diff, allow_consecutive=True, allow_repeat_history=True, excluded_pairs=excluded_pairs)
         if matches:
             return matches, "allow_all"
     
@@ -427,11 +434,20 @@ else:
             elif constraint_level_a == "allow_all":
                 st.warning("⚠️ コート1: 連戦と過去の対戦を許可してマッチングしました")
             st.session_state.last_generated_matches.append((match_a, "コート1", court_a_type))
+            
+            # 使用済みペア情報を収集
+            used_pairs = set()
+            if court_a_type == "ダブルス":
+                used_pairs.add(match_a[0])  # Aチームペア
+                used_pairs.add(match_a[1])  # Bチームペア
+            
+            # プレイヤー情報も収集
             players_in_match_a = [match_a[0], match_a[1]] if court_a_type == "シングルス" else a_doubles_input.get(match_a[0], []) + b_doubles_input.get(match_a[1], [])
             last_played_for_b = set(players_in_match_a)
             combined_last_played = st.session_state.last_played_players | last_played_for_b
 
-            matches_b, constraint_level_b = generate_matches(court_b_type, a_players_list, b_players_list, st.session_state.match_history, combined_last_played, a_doubles_input, b_doubles_input, st.session_state.player_match_count, st.session_state.max_rank_diff, allow_consecutive_setting, allow_repeat_setting)
+            # コート2生成（ペア除外も追加）
+            matches_b, constraint_level_b = generate_matches(court_b_type, a_players_list, b_players_list, st.session_state.match_history, combined_last_played, a_doubles_input, b_doubles_input, st.session_state.player_match_count, st.session_state.max_rank_diff, allow_consecutive_setting, allow_repeat_setting, used_pairs)
             
             if matches_b:
                 match_b = matches_b[0]
